@@ -111,3 +111,43 @@ CREATE TABLE historico_servicos (
     FOREIGN KEY (FK_id_funcionario) REFERENCES funcionario (id_funcionario)
 
 );  
+
+CREATE TABLE os_servico (
+    id_os_servico INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    FK_id_os INT NOT NULL,
+    FK_id_servico INT NOT NULL,
+    quantidade INT NOT NULL DEFAULT 1,
+    valor_cobrado DECIMAL(10,2) NOT NULL,
+    observacao VARCHAR(255) NULL,
+
+    FOREIGN KEY (FK_id_os) REFERENCES ordem_servico (id_os),
+    FOREIGN KEY (FK_id_servico) REFERENCES servico (id_servico)
+);
+
+-- OS (N) <-> Peça (N): peças consumidas em cada OS (zero, uma ou várias).
+-- valor_unitario guarda o preço da peça no momento do uso.
+CREATE TABLE os_peca (
+    id_os_peca INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    FK_id_os INT NOT NULL,
+    FK_id_peca INT NOT NULL,
+    quantidade INT NOT NULL,
+    valor_unitario DECIMAL(10,2) NOT NULL,
+
+    FOREIGN KEY (FK_id_os) REFERENCES ordem_servico (id_os),
+    FOREIGN KEY (FK_id_peca) REFERENCES peca (id_peca)
+);
+
+-- Pagamentos: uma OS (1) pode ter vários pagamentos (N) -> permite pagamento parcial.
+CREATE TABLE pagamento (
+    id_pagamento INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    FK_id_os INT NOT NULL,
+    FK_id_forma_pagamento INT NOT NULL,
+    valor DECIMAL(10,2) NOT NULL,
+    data_pagamento DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    observacao VARCHAR(255) NULL,
+
+    FOREIGN KEY (FK_id_os) REFERENCES ordem_servico (id_os),
+    FOREIGN KEY (FK_id_forma_pagamento) REFERENCES forma_pagamento (id_forma_pagamento)
+);
+
+
