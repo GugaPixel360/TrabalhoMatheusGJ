@@ -1,0 +1,166 @@
+Relatório Técnico — Banco de Dados da Assistência Técnica
+1. Introdução
+O banco de dados em MySQL descrito aqui substitui as planilhas e os registros manuais de uma assistência técnica de computadores, notebooks e outros equipamentos eletrônicos. O controle manual causava perda do histórico de manutenções, duplicidade de informações, falta de controle sobre os serviços realizados e dificuldade de saber quais equipamentos ainda aguardavam atendimento.
+A solução reúne 13 tabelas, uma função, uma view e quatro triggers, todas no arquivo SQL entregue. Ela foi pensada para responder às perguntas da administração em quatro áreas: controle operacional, controle de estoque, controle financeiro e análise de desempenho.
+Este relatório explica três pontos: as decisões de modelagem, as regras de negócio implementadas e a finalidade de cada automatização.
+2. Decisões de modelagem
+O modelo gira em torno da ordem de serviço (OS), que liga o equipamento, o funcionário responsável e a categoria do problema. Cada tabela tem uma função específica:
+Tabela
+Finalidade
+Relacionamento principal
+cliente
+Cadastro de clientes, com CPF/CNPJ único
+1:N com equipamento
+funcionario
+Funcionários e técnicos, com indicador de ativo
+1:N com ordem_servico
+tipo_equipamento
+Classifica o equipamento (notebook, desktop, monitor)
+1:N com equipamento
+categoria_problema
+Classifica o problema relatado na OS
+1:N com ordem_servico
+forma_pagamento
+Formas de pagamento aceitas
+1:N com pagamento
+servico
+Catálogo de serviços, com valor padrão (preço de tabela)
+N:N com ordem_servico, via os_servico
+peca
+Estoque: código, preço, quantidade e estoque mínimo
+N:N com ordem_servico, via os_peca
+equipamento
+Equipamento pertencente a um cliente
+1:N com ordem_servico
+ordem_servico
+Atendimento: problema, diagnóstico, datas e situação
+Centro do modelo
+os_servico
+Serviços executados em cada OS, com quantidade e valor cobrado
+Associativa (OS e serviço)
+os_peca
+Peças usadas em cada OS, com quantidade e preço no momento do uso
+Associativa (OS e peça)
+pagamento
+Valores recebidos, por forma de pagamento
+N:1 com ordem_servico
+log_ordem_servico
+Histórico das mudanças de situação da OS
+N:1 com ordem_servico
+As principais decisões foram estas:
+• Situação da OS como ENUM. Os valores ABERTA, EM_ANDAMENTO, CONCLUIDA e CANCELADA permitem identificar atendimentos concluídos, pendentes e cancelados, e impedem valores fora do padrão.
+• Um responsável por OS. A chave estrangeira do funcionário é obrigatória, então toda OS tem exatamente um funcionário responsável.
+• Tabelas associativas com chave própria. Os relacionamentos N:N entre OS e serviço e entre OS e peça viraram os_servico e os_peca, que guardam quantidade e valor de cada uso.
+• Preço registrado no momento do uso. O valor cobrado em os_servico e o valor unitário em os_peca são gravados na OS. O valor padrão do serviço e o preço da peça são apenas preços de tabela, então mudá-los não altera o histórico de atendimentos antigos.
+• Pagamento como valor recebido. Uma OS pode ter vários pagamentos, o que permite pagamento parcial. O valor pendente não é gravado: é calculado pela diferença entre o total da OS e o total pago, para nunca ficar inconsistente.
+• Mão de obra nos serviços. O custo de mão de obra é representado pelos serviços cobrados em os_servico. O total da OS é a soma dos serviços com as peças.
+• Tabelas de apoio. Tipo de equipamento, categoria de problema e forma de pagamento evitam texto repetido e permitem consultas como problemas mais frequentes e arrecadação por forma de pagamento.
+• Inativar em vez de excluir. Funcionários e peças têm o campo ativo, o que permite tirá-los de uso sem apagar o histórico ligado a eles.
+• Tabela de log. A log_ordem_servico guarda cada mudança de situação da OS, formando uma trilha de auditoria.
+3. Normalização e integridade
+O modelo está na terceira forma normal (3FN), e a integridade é garantida por chaves e restrições dentro do próprio banco, sem depender da aplicação.
+Normalização
+• 1FN. Cada campo guarda um único valor. As peças e os serviços de uma OS ficam em linhas de os_peca e os_servico, nunca em listas dentro de uma coluna. O endereço do cliente é um único campo de texto, uma simplificação aceita para o escopo da atividade.
+• 2FN. Todas as tabelas têm chave primária simples (código inteiro auto incrementado), então não existe dependência parcial da chave.
+• 3FN. Dados descritivos ficam em um só lugar: o nome do tipo de equipamento em tipo_equipamento, o nome da forma de pagamento em forma_pagamento, os dados do cliente em cliente. Valores derivados, como o total da OS e o saldo pendente, não são gravados: são calculados pela função fn_total_os e pela view vw_os_financeiro.
+Integridade e restrições
+Mecanismo
+Onde é aplicado
+O que garante
+Chave primária
+As 13 tabelas
+Cada registro tem identificação única
+Chave estrangeira
+equipamento, ordem_servico, os_servico, os_peca, pagamento e log_ordem_servico
+Nenhum registro aponta para um dado que não existe
+Exclusão restrita
+Todas as chaves estrangeiras, sem ON DELETE CASCADE
+Não é possível apagar um registro que tenha dependentes, o que preserva o histórico
+UNIQUE
+CPF/CNPJ do cliente, CPF do funcionário, número de série do equipamento, código da peça e nome de tipo, categoria, forma de pagamento e serviço
+Evita cadastros duplicados
+CHECK
+Estoque, preços e quantidades não negativos; quantidade maior que zero em os_peca e os_servico; pagamento maior que zero; ativo igual a 0 ou 1; data de conclusão não anterior à de entrada
+Bloqueia valores sem sentido
+NOT NULL e DEFAULT
+Campos obrigatórios; situação ABERTA e datas com a data atual por padrão
+Toda OS nasce completa e aberta
+As restrições CHECK exigem MySQL 8.0.16 ou superior, versão em que passaram a ser aplicadas.
+4. Regras de negócio implementadas
+Todas as regras do enunciado são garantidas no próprio banco, por estrutura das tabelas ou por trigger.
+Regra de negócio
+Como é garantida
+Um cliente pode cadastrar mais de um equipamento
+Chave estrangeira de equipamento para cliente, sem limite de equipamentos por cliente
+Um equipamento pode ter várias OS ao longo do tempo
+Chave estrangeira de ordem_servico para equipamento
+Cada OS tem um funcionário responsável
+Chave estrangeira obrigatória (NOT NULL) para funcionario
+Uma OS pode usar nenhuma, uma ou várias peças, e uma peça pode servir a várias OS
+Tabela associativa os_peca, sem exigência de ao menos uma linha por OS
+Não é possível consumir mais peças do que o estoque
+Trigger trg_baixar_estoque, com mensagem de erro; o CHECK de estoque não negativo é a segunda barreira
+O estoque é atualizado quando uma peça é usada
+Trigger trg_baixar_estoque, que desconta a quantidade usada
+Toda OS tem uma situação que mostra o andamento
+Coluna ENUM obrigatória, com padrão ABERTA, e registro de cada mudança em log_ordem_servico
+É possível identificar atendimentos concluídos, pendentes e cancelados
+Situação CONCLUIDA para os concluídos, ABERTA e EM_ANDAMENTO para os pendentes e CANCELADA para os cancelados
+O histórico de serviços é preservado
+Exclusão restrita nas chaves estrangeiras, preço gravado na OS, OS finalizada bloqueada para alteração e trilha de log
+É possível identificar valores recebidos e pagamentos pendentes
+Tabela pagamento (valores recebidos) e view vw_os_financeiro (total pago e saldo pendente)
+Dados dependentes mantêm integridade referencial
+Chaves estrangeiras em todas as tabelas que referenciam outra
+Além das regras do enunciado, o banco aplica quatro regras de apoio, que dão coerência ao fluxo do atendimento:
+• Peças só podem ser usadas em OS abertas ou em andamento.
+• Peças inativas não podem ser usadas.
+• Uma OS só pode ser concluída se tiver ao menos um serviço registrado.
+• Pagamentos só podem ser registrados para OS concluídas e nunca podem passar do saldo devedor.
+5. Automatizações
+O banco tem uma função, uma view e quatro triggers. Elas tiram do usuário o trabalho de cálculos e conferências repetitivas e impedem que as regras de negócio sejam quebradas por engano.
+Objeto
+Quando age
+Finalidade
+fn_total_os
+Quando chamada
+Calcular o valor total de uma OS
+vw_os_financeiro
+Quando consultada
+Mostrar total, valor pago e saldo pendente de cada OS
+trg_baixar_estoque
+Antes de inserir em os_peca
+Validar o uso da peça e baixar o estoque
+trg_atualizar_status_os
+Antes de atualizar ordem_servico
+Controlar a conclusão e proteger OS finalizadas
+trg_validar_pagamento
+Antes de inserir em pagamento
+Aceitar só pagamentos coerentes com o saldo devedor
+trg_log_status_os
+Depois de atualizar ordem_servico
+Registrar cada mudança de situação
+Função fn_total_os. Recebe o código de uma OS e devolve a soma dos serviços (quantidade vezes valor cobrado) com as peças (quantidade vezes valor unitário). Centraliza o cálculo, que é usado na validação de pagamentos e segue a mesma regra da view.
+View vw_os_financeiro. Para cada OS, mostra cliente, situação, total de serviços, total de peças, total da OS, total pago e saldo pendente. O saldo pendente só é calculado para OS concluídas. A view responde às perguntas financeiras da direção, como quais clientes têm pagamentos pendentes e qual é o faturamento.
+Trigger trg_baixar_estoque. Cada peça inserida em uma OS passa por estas conferências, nesta ordem:
+1. A OS está aberta ou em andamento.
+2. A quantidade é maior que zero.
+3. A peça existe e está ativa. A linha da peça é travada durante a operação, para que dois usos simultâneos não consumam o mesmo estoque.
+4. A quantidade não ultrapassa o estoque disponível. Caso contrário, a operação é recusada com a mensagem de estoque insuficiente.
+Se tudo estiver certo, a trigger grava em os_peca o preço atual da peça e desconta a quantidade do estoque. Assim o estoque é atualizado sem intervenção manual e o preço cobrado fica registrado.
+Trigger trg_atualizar_status_os. Roda a cada atualização de uma OS e aplica quatro regras:
+• OS concluída ou cancelada não pode mais ser alterada, o que preserva o histórico.
+• Informar a data de conclusão em uma OS não cancelada muda a situação para CONCLUIDA.
+• Uma OS só pode ser concluída se tiver ao menos um serviço registrado.
+• Ao concluir sem data de conclusão, a trigger grava a data e hora atuais.
+Trigger trg_validar_pagamento. Confere se a OS existe e está concluída. Depois soma os pagamentos já feitos e recusa o novo pagamento se o total passar do valor da OS, calculado por fn_total_os. Isso permite pagamentos parciais sem risco de receber a mais, e o saldo pendente passa a ser a diferença entre o total da OS e o total pago.
+Trigger trg_log_status_os. Quando a situação de uma OS muda, grava em log_ordem_servico a situação anterior, a nova e a data da alteração. Como roda depois da trg_atualizar_status_os, o log registra a situação final, já com os ajustes automáticos. O resultado é um histórico do andamento de cada atendimento.
+6. Conclusão e limitações
+O banco atende às regras do enunciado: o modelo está na 3FN, a integridade é garantida por chaves e restrições, e as automatizações cuidam de estoque, situação da OS, pagamentos e histórico. A direção consegue consultar o andamento dos atendimentos, o consumo de peças e a situação financeira a partir das mesmas tabelas, sem duplicar dados.
+Algumas decisões e limites do modelo merecem registro:
+• Pagamento só depois da conclusão. Adiantamentos de OS ainda em andamento não são aceitos.
+• Mão de obra nos serviços. Não existe um campo separado de mão de obra; ela é cobrada como serviço em os_servico.
+• Cancelamento não devolve peças. Se uma OS for cancelada depois de usar peças, o estoque não é reposto automaticamente.
+• Itens de OS sem trava após a conclusão. Alterar ou excluir linhas de os_peca e os_servico não é controlado por trigger, e mexer em os_peca não reajusta o estoque.
+• Situações sem ordem definida. O banco não impede, por exemplo, voltar uma OS de EM_ANDAMENTO para ABERTA.
+Triggers adicionais para esses três últimos pontos seriam a evolução natural do modelo.
